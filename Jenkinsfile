@@ -1,4 +1,6 @@
+
 pipeline {
+
     agent any
 
     options {
@@ -17,6 +19,7 @@ pipeline {
 
     stages {
 
+        // STAGE 1: CHECKOUT GITHUB
         stage('1. Checkout GitHub') {
             steps {
                 echo 'Checking out source code from GitHub'
@@ -29,29 +32,19 @@ pipeline {
                     echo "Project files:"
                     ls -la
 
-                    test -f Dockerfile || {
-                        echo "ERROR: Dockerfile not found"
-                        exit 1
-                    }
+                    test -f Dockerfile
+                    test -f index.html
+                    test -f Jenkinsfile
 
-                    test -f index.html || {
-                        echo "ERROR: index.html not found"
-                        exit 1
-                    }
-
-                    test -f Jenkinsfile || {
-                        echo "ERROR: Jenkinsfile not found"
-                        exit 1
-                    }
-
-                    echo "All required files are present."
+                    echo "All required files found."
                 '''
             }
         }
 
+        // STAGE 2: CHECK DOCKER
         stage('2. Check Docker') {
             steps {
-                echo 'Checking Docker CLI and daemon'
+                echo 'Checking Docker installation'
 
                 sh '''
                     set -eu
@@ -61,9 +54,10 @@ pipeline {
             }
         }
 
+        // STAGE 3: CONFIGURE NETWORK
         stage('3. Configure Docker Network') {
             steps {
-                echo 'Creating Docker network if necessary'
+                echo 'Configuring Docker network'
 
                 sh '''
                     set -eu
@@ -78,24 +72,27 @@ pipeline {
             }
         }
 
+        // STAGE 4: BUILD WEBSITE IMAGE
         stage('4. Build Website Image') {
             steps {
-                echo 'Building website image'
+                echo 'Building Docker image'
 
                 sh '''
                     set -eu
 
                     docker build -t "$IMAGE_NAME" .
 
-                    echo "Website image built successfully."
+                    echo "Docker image built successfully."
+
                     docker image ls "$IMAGE_NAME"
                 '''
             }
         }
 
+        // STAGE 5: REMOVE OLD CONTAINER
         stage('5. Remove Old Website') {
             steps {
-                echo 'Removing old website container if it exists'
+                echo 'Removing previous website container'
 
                 sh '''
                     docker rm -f "$APP_NAME" 2>/dev/null || true
@@ -103,6 +100,7 @@ pipeline {
             }
         }
 
+        // STAGE 6: DEPLOY WEBSITE
         stage('6. Deploy Website') {
             steps {
                 echo 'Deploying website container'
@@ -117,15 +115,17 @@ pipeline {
                         -p "$HOST_PORT:$CONTAINER_PORT" \
                         "$IMAGE_NAME"
 
-                    echo "Website container started."
-                    docker ps -a --filter "name=^/${APP_NAME}$"
+                    echo "Website deployed successfully."
+
+                    docker ps -a
                 '''
             }
         }
 
+        // STAGE 7: VERIFY CONTAINER
         stage('7. Verify Container') {
             steps {
-                echo 'Checking website container status'
+                echo 'Checking container status'
 
                 sh '''
                     set -eu
@@ -134,48 +134,46 @@ pipeline {
                         --format='{{.State.Running}}' "$APP_NAME")
 
                     if [ "$RUNNING" != "true" ]; then
-                        echo "ERROR: Website container is not running."
-                        docker logs "$APP_NAME" || true
+                        echo "ERROR: Container is not running."
+                        docker logs "$APP_NAME"
                         exit 1
                     fi
 
-                    echo "SUCCESS: Website container is running."
+                    echo "SUCCESS: Container is running."
                 '''
             }
         }
 
+        // STAGE 8: VERIFY DOCKER NETWORK
         stage('8. Verify Docker Network') {
             steps {
-                echo 'Checking Docker network connectivity'
+                echo 'Verifying network connectivity'
 
                 sh '''
                     set -eu
 
                     if ! docker network inspect "$NETWORK_NAME" \
-                        --format='{{json .Containers}}' \
-                        | grep -q "$APP_NAME"; then
+                        --format='{{json .Containers}}' | grep -q "$APP_NAME"; then
 
-                        echo "ERROR: Website is not connected to the network."
-                        docker network inspect "$NETWORK_NAME"
+                        echo "ERROR: Website is not connected to network."
                         exit 1
                     fi
 
                     if ! docker network inspect "$NETWORK_NAME" \
-                        --format='{{json .Containers}}' \
-                        | grep -q "$JENKINS_CONTAINER"; then
+                        --format='{{json .Containers}}' | grep -q "$JENKINS_CONTAINER"; then
 
-                        echo "Connecting Jenkins to the network..."
+                        echo "Connecting Jenkins to Docker network..."
 
                         docker network connect \
                             "$NETWORK_NAME" "$JENKINS_CONTAINER"
                     fi
 
-                    echo "Jenkins and website network configuration verified."
-                    docker network inspect "$NETWORK_NAME"
+                    echo "Jenkins and website network verified."
                 '''
             }
         }
 
+        // STAGE 9: TEST WEBSITE
         stage('9. Test Website') {
             steps {
                 echo 'Testing website HTTP response and content'
@@ -186,6 +184,7 @@ pipeline {
                     SUCCESS=0
 
                     for i in $(seq 1 15); do
+
                         echo "HTTP test attempt $i of 15"
 
                         if curl -fsS \
@@ -203,120 +202,143 @@ pipeline {
 
                     if [ "$SUCCESS" -ne 1 ]; then
                         echo "ERROR: Website did not respond."
-                        docker logs "$APP_NAME" || true
                         exit 1
                     fi
 
-                    echo "SUCCESS: Website returned an HTTP response."
+                    echo "SUCCESS: Website returned HTTP response."
 
-                    if grep -qi "Wisdom of Indian Saints" /tmp/mevi-site.html; then
-                        echo "SUCCESS: Expected website title was found."
+                    if grep -qi "ShopEase - Online Shopping" /tmp/mevi-site.html; then
+
+                        echo "SUCCESS: ShopEase website title verified."
+
                     else
-                        echo "ERROR: Expected website title was not found."
-                        echo "Actual page title:"
+
+                        echo "ERROR: Website title not found."
+
                         grep -i "<title>" /tmp/mevi-site.html || true
+
                         exit 1
                     fi
                 '''
             }
         }
 
+        // STAGE 10: VERIFY PUBLISHED PORT
         stage('10. Verify Published Port') {
             steps {
-                echo 'Verifying website port mapping'
+                echo 'Verifying published website port'
 
                 sh '''
                     set -eu
 
-                    echo "Published website ports:"
-                    docker port "$APP_NAME"
+                    echo "Checking published port..."
 
-                    echo "Checking Nginx response inside the website container..."
+                    PORT_MAPPING=$(docker port "$APP_NAME" "$CONTAINER_PORT")
+
+                    echo "$PORT_MAPPING"
+
+                    echo "$PORT_MAPPING" | grep -q "$HOST_PORT"
+
+                    echo "SUCCESS: Port mapping verified."
+
+                    echo "Checking website inside container..."
 
                     docker exec "$APP_NAME" \
                         wget -q -O - http://127.0.0.1/ \
                         > /tmp/mevi-container-page.html
 
-                    if grep -qi "Wisdom of Indian Saints" /tmp/mevi-container-page.html; then
-                        echo "SUCCESS: Website responds inside the container."
+                    if grep -qi "ShopEase - Online Shopping" /tmp/mevi-container-page.html; then
+
+                        echo "SUCCESS: Website content verified."
+
                     else
+
                         echo "ERROR: Website content verification failed."
                         exit 1
                     fi
 
-                    echo "Host port: 8082"
                     echo "Website URL: http://localhost:8082/"
                 '''
             }
         }
 
+        // STAGE 11: DEPLOYMENT SUMMARY
         stage('11. Deployment Summary') {
             steps {
                 echo 'Displaying deployment summary'
 
                 sh '''
-                    echo "========================================"
-                    echo "DEPLOYMENT SUMMARY"
-                    echo "========================================"
+                    echo "=================================="
+                    echo "       DEPLOYMENT SUMMARY"
+                    echo "=================================="
 
-                    echo "Docker image:"
+                    echo "Docker Image:"
                     docker image ls "$IMAGE_NAME"
 
-                    echo "Website container:"
+                    echo "Website Container:"
                     docker ps --filter "name=^/${APP_NAME}$"
 
-                    echo "Published ports:"
+                    echo "Docker Network:"
+                    docker network ls
+
+                    echo "Published Port:"
                     docker port "$APP_NAME"
 
-                    echo "Website URL: http://localhost:8082/"
+                    echo "Website URL:"
+                    echo "http://localhost:8082/"
 
-                    echo "========================================"
+                    echo "=================================="
+                    echo "DEPLOYMENT SUCCESSFUL!"
+                    echo "=================================="
                 '''
             }
         }
     }
 
     post {
+
         success {
             echo '''
-            ==========================================
-            PIPELINE SUCCESSFUL!
-            ==========================================
-            GitHub checkout: SUCCESS
-            Docker check: SUCCESS
-            Image build: SUCCESS
-            Website deployment: SUCCESS
-            HTTP verification: SUCCESS
-            Content verification: SUCCESS
+            ==================================
+                PIPELINE SUCCESSFUL!
+            ==================================
 
-            Open your website:
+            GitHub Checkout: SUCCESS
+            Docker Check: SUCCESS
+            Image Build: SUCCESS
+            Network Configuration: SUCCESS
+            Website Deployment: SUCCESS
+            Container Verification: SUCCESS
+            HTTP Verification: SUCCESS
+            Content Verification: SUCCESS
+
+            Website URL:
             http://localhost:8082/
-            ==========================================
+
+            ==================================
             '''
         }
 
         failure {
             echo '''
-            ==========================================
-            PIPELINE FAILED
-            ==========================================
-            Open Console Output and locate the first
-            failed command.
+            ==================================
+                PIPELINE FAILED
+            ==================================
 
-            Check Docker access, file names,
-            container status, network connectivity,
-            and the expected website title.
-            ==========================================
+            Check the Console Output
+            for the first failed stage.
+
+            ==================================
             '''
 
             sh '''
-                echo "All containers:"
+                echo "Docker containers:"
                 docker ps -a || true
 
-                echo "Website container logs:"
+                echo "Website logs:"
                 docker logs "$APP_NAME" 2>&1 || true
 
-                echo "Docker network details:"
+                echo "Docker network:"
                 docker network inspect "$NETWORK_NAME" 2>&1 || true
             '''
         }
